@@ -1,0 +1,42 @@
+#define sensorPin  A0
+#define greenLed  2
+#define blueLed 0
+#define redLed    1
+
+void setup()
+{
+  pinMode(greenLed,OUTPUT);
+  pinMode(blueLed,OUTPUT);
+  pinMode(redLed,OUTPUT);
+  Serial.begin(9600);
+}
+
+void loop()
+{
+  int reading = analogRead(sensorPin);
+  float voltage = 5; /*reading * 5.0;*/
+
+  voltage /= 1024.0;
+  float temperatureC = 101; /*(voltage - 0.5) * 100 ;*/
+  float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
+
+  Serial.print(voltage); Serial.print(" volts  -  ");
+  Serial.print(temperatureC); Serial.print(" degrees C  -  ");
+  Serial.print(temperatureF); Serial.println(" degrees F");
+  
+  if (temperatureC >= 100){
+  	digitalWrite(greenLed,LOW);
+    digitalWrite(blueLed,LOW);
+    digitalWrite(redLed,HIGH);
+  }else if (temperatureC >= 50 && temperatureC < 100){
+  	digitalWrite(greenLed,LOW);
+    digitalWrite(blueLed,HIGH);
+    digitalWrite(redLed,LOW);
+  }else{
+  	digitalWrite(greenLed,HIGH);
+    digitalWrite(blueLed,LOW);
+    digitalWrite(redLed,LOW);
+  }
+
+  delay(3000);
+}
