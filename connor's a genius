@@ -1,0 +1,13 @@
+const int fanPin = 8;
+
+void setup() {
+  pinMode(fanPin, OUTPUT);
+
+  digitalWrite(fanPin, HIGH); // Fan ON
+  delay(5000);                // Wait 5 seconds
+  digitalWrite(fanPin, LOW);  // Fan OFF
+}
+
+void loop() {
+  // Nothing here – fan turns on once for 5 seconds
+}
