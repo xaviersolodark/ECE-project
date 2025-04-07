@@ -1,0 +1,111 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_AHTX0.h>
+#include <LiquidCrystal_I2C.h>
+
+// Pin definitions
+#define tempPotPin A1     // Pot sets dangerous temp range
+#define humidPotPin A2    // Pot sets dangerous humidity range
+#define co2PotPin A3      // Pot sets dangerous CO2 range
+#define greenLed 2
+#define blueLed 0
+#define redLed 1
+#define fanPin 8
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // LCD setup
+Adafruit_AHTX0 aht;                 // AHT20 sensor
+
+void setup() {
+  // Set pins as outputs
+  pinMode(greenLed, OUTPUT);
+  pinMode(blueLed, OUTPUT);
+  pinMode(redLed, OUTPUT);
+  pinMode(fanPin, OUTPUT);
+
+  Serial.begin(115200); // Start serial
+  while (!Serial);
+
+  Wire.begin(); // Start I2C 
+  if (!aht.begin(&Wire, 0x38)) {
+    Serial.println("AHT20 not found!");
+    while (1); // Stop if sensor fails
+  }
+
+  lcd.init();       // Start LCD
+  lcd.backlight();  // Turn on backlight
+  lcd.setCursor(0, 0);
+  lcd.print("Starting...");
+  delay(2000);
+
+  // Fan test
+  digitalWrite(fanPin, HIGH); // Fan on
+  delay(5000);                // Wait 5 seconds
+  digitalWrite(fanPin, LOW);  // Fan off
+}
+
+void loop() {
+  // Read potentiometers (0-1023 maps to 0-3.3V on R4)
+  int tempPotValue = analogRead(tempPotPin);
+  int humidPotValue = analogRead(humidPotPin);
+  int co2PotValue = analogRead(co2PotPin);
+
+  // Set dangerous ranges with pots
+  float dangerTemp = map(tempPotValue, 0, 1023, 30, 100);     // Dangerous temp: 30-100°C
+  float dangerHumidity = map(humidPotValue, 0, 1023, 50, 100); // Dangerous humidity: 50-100%
+  int dangerCO2 = map(co2PotValue, 0, 1023, 400, 2000);       // Dangerous CO2: 400-2000 ppm
+
+  // Read AHT20 sensor
+  sensors_event_t humidity, temp;
+  if (!aht.getEvent(&humidity, &temp)) {
+    Serial.println("AHT20 read failed!");
+  } else {
+    float temperatureC = temp.temperature;          // Get temp from AHT20
+    float humidityValue = humidity.relative_humidity; // Get humidity from AHT20
+
+    // Guess CO2 based on temp and humidity
+    int co2 = 400 + (temperatureC - 20) * 20 + (humidityValue - 50) * 10;
+    if (co2 < 400) co2 = 400; // Keep it at least 400 ppm
+
+    // Show readings on serial
+    Serial.print("Temp: "); Serial.print(temperatureC); Serial.print(" °C  -  ");
+    Serial.print("Humidity: "); Serial.print(humidityValue); Serial.print(" %  -  ");
+    Serial.print("Est. CO2: "); Serial.print(co2); Serial.println(" ppm");
+
+    // Update LCD
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("H:"); lcd.print(humidityValue); lcd.print("% T:"); lcd.print(temperatureC); lcd.print("C");
+    lcd.setCursor(0, 1);
+    lcd.print("CO2:"); lcd.print(co2); lcd.print("ppm");
+
+    // Control LEDs and fan based on dangerous ranges
+    bool danger = false;
+    if (temperatureC >= dangerTemp || humidityValue >= dangerHumidity || co2 >= dangerCO2) {
+      digitalWrite(redLed, HIGH);
+      digitalWrite(greenLed, LOW);
+      digitalWrite(blueLed, LOW);
+      digitalWrite(fanPin, HIGH); // Danger! Fan on
+      danger = true;
+    } else if (temperatureC >= 50 && temperatureC < dangerTemp) {
+      digitalWrite(blueLed, HIGH);
+      digitalWrite(greenLed, LOW);
+      digitalWrite(redLed, LOW);
+      digitalWrite(fanPin, LOW); // Warning zone
+    } else {
+      digitalWrite(greenLed, HIGH);
+      digitalWrite(blueLed, LOW);
+      digitalWrite(redLed, LOW);
+      digitalWrite(fanPin, LOW); // All good
+    }
+
+    // Extra humidity check
+    if (humidityValue >= 100) {
+      digitalWrite(redLed, HIGH);
+      digitalWrite(greenLed, LOW);
+      digitalWrite(blueLed, LOW);
+      digitalWrite(fanPin, HIGH); // 
+    }
+  }
+
+  delay(3000); // Wait 3 seconds
+}
