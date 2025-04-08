@@ -15,9 +15,17 @@
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Adafruit_AHTX0 aht;
 
-// Fan trigger state
-bool fanTriggered = false;
+// Timing
 unsigned long fanStartTime = 0;
+bool fanTriggered = false;
+
+unsigned long lastSensorReadTime = 0;
+const unsigned long sensorInterval = 30000; // 30 seconds
+
+// Sensor values (stored to persist between updates)
+float temperatureC = 0;
+float humidityValue = 0;
+int co2 = 400;
 
 void setup() {
   pinMode(greenLed, OUTPUT);
@@ -44,41 +52,47 @@ void setup() {
 }
 
 void loop() {
+  unsigned long currentMillis = millis();
+
   // Read potentiometers
   int tempPotValue = analogRead(tempPotPin);
   int humidPotValue = analogRead(humidPotPin);
   int co2PotValue = analogRead(co2PotPin);
 
-  // Map to thresholds
   float dangerTemp = map(tempPotValue, 0, 1023, 30, 100);
   float dangerHumidity = map(humidPotValue, 0, 1023, 50, 100);
   int dangerCO2 = map(co2PotValue, 0, 1023, 400, 2000);
 
-  // Read sensor
-  sensors_event_t humidity, temp;
-  if (!aht.getEvent(&humidity, &temp)) {
-    Serial.println("AHT20 read failed!");
-    return;
+  // === SENSOR UPDATE EVERY 30s ===
+  if (currentMillis - lastSensorReadTime >= sensorInterval) {
+    lastSensorReadTime = currentMillis;
+
+    sensors_event_t humidity, temp;
+    if (!aht.getEvent(&humidity, &temp)) {
+      Serial.println("AHT20 read failed!");
+    } else {
+      temperatureC = temp.temperature;
+      humidityValue = humidity.relative_humidity;
+
+      // Estimate CO2
+      co2 = 400 + (temperatureC - 20) * 20 + (humidityValue - 50) * 10;
+      if (co2 < 400) co2 = 400;
+
+      // Print to serial
+      Serial.print("Temp: "); Serial.print(temperatureC); Serial.print(" C, ");
+      Serial.print("Humidity: "); Serial.print(humidityValue); Serial.print(" %, ");
+      Serial.print("CO2: "); Serial.print(co2); Serial.println(" ppm");
+
+      // Update LCD
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("H:"); lcd.print(humidityValue); lcd.print("% T:"); lcd.print(temperatureC); lcd.print("C");
+      lcd.setCursor(0, 1);
+      lcd.print("CO2:"); lcd.print(co2); lcd.print("ppm");
+    }
   }
 
-  float temperatureC = temp.temperature;
-  float humidityValue = humidity.relative_humidity;
-  int co2 = 400 + (temperatureC - 20) * 20 + (humidityValue - 50) * 10;
-  if (co2 < 400) co2 = 400;
-
-  // Display to serial
-  Serial.print("Temp: "); Serial.print(temperatureC); Serial.print(" C, ");
-  Serial.print("Humidity: "); Serial.print(humidityValue); Serial.print(" %, ");
-  Serial.print("CO2: "); Serial.print(co2); Serial.println(" ppm");
-
-  // Update LCD
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("H:"); lcd.print(humidityValue); lcd.print("% T:"); lcd.print(temperatureC); lcd.print("C");
-  lcd.setCursor(0, 1);
-  lcd.print("CO2:"); lcd.print(co2); lcd.print("ppm");
-
-  // Detect danger
+  // === FAN TRIGGER LOGIC ===
   bool danger = (
     temperatureC >= dangerTemp ||
     humidityValue >= dangerHumidity ||
@@ -86,22 +100,20 @@ void loop() {
     humidityValue >= 100
   );
 
-  // Only trigger fan if not already running
   if (danger && !fanTriggered) {
     digitalWrite(fanPin, HIGH); // Fan ON
-    fanStartTime = millis();
+    fanStartTime = currentMillis;
     fanTriggered = true;
     Serial.println("FAN TRIGGERED!");
   }
 
-  // Check if 5 seconds passed since fan turned on
-  if (fanTriggered && millis() - fanStartTime >= 5000) {
+  if (fanTriggered && currentMillis - fanStartTime >= 5000) {
     digitalWrite(fanPin, LOW); // Fan OFF after 5s
     fanTriggered = false;
     Serial.println("FAN OFF");
   }
 
-  // LED logic
+  // === LED Logic ===
   if (danger) {
     digitalWrite(redLed, HIGH);
     digitalWrite(greenLed, LOW);
@@ -116,5 +128,5 @@ void loop() {
     digitalWrite(redLed, LOW);
   }
 
-  delay(500); // Short delay for responsiveness
+  delay(100); // Keep loop responsive
 }
