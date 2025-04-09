@@ -1,1 +1,155 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_AHTX0.h>
+#include <LiquidCrystal_I2C.h>
+
+// LCD and sensor setup
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+Adafruit_AHTX0 aht;
+
+// Pin definitions
+#define tempPotPin A1
+#define humidPotPin A2
+#define co2PotPin A3
+#define greenLed 2
+#define blueLed 0
+#define redLed 1
+#define fanPin 8
+#define buttonPin 7  // Button to toggle screens
+
+// Timing variables
+unsigned long fanStartTime = 0;
+bool fanTriggered = false;
+
+unsigned long lastSensorReadTime = 0;
+const unsigned long sensorInterval = 30000; // 30 seconds
+
+bool showSensorScreen = true;
+bool lastButtonState = HIGH;
+unsigned long lastButtonPressTime = 0;
+const unsigned long debounceDelay = 50;  // debounce delay
+
+// Stored sensor data
+float temperatureC = 0;
+float humidityValue = 0;
+int co2 = 400;
+
+void setup() {
+  // Pin modes
+  pinMode(greenLed, OUTPUT);
+  pinMode(blueLed, OUTPUT);
+  pinMode(redLed, OUTPUT);
+  pinMode(fanPin, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);  // Use internal pull-up
+
+  Serial.begin(115200);
+  Wire.begin();
+
+  if (!aht.begin(&Wire, 0x38)) {
+    Serial.println("AHT20 not found!");
+    while (1);
+  }
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("System Starting...");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // === Read Potentiometers ===
+  int tempPotValue = analogRead(tempPotPin);
+  int humidPotValue = analogRead(humidPotPin);
+  int co2PotValue = analogRead(co2PotPin);
+
+  float dangerTemp = map(tempPotValue, 0, 1023, 20, 100);
+  float dangerHumidity = map(humidPotValue, 0, 1023, 20, 100);
+  int dangerCO2 = map(co2PotValue, 0, 1023, 300, 2000);
+
+  // === Read sensor every 30s ===
+  if (currentMillis - lastSensorReadTime >= sensorInterval) {
+    lastSensorReadTime = currentMillis;
+
+    sensors_event_t humidity, temp;
+    if (!aht.getEvent(&humidity, &temp)) {
+      Serial.println("AHT20 read failed!");
+    } else {
+      temperatureC = temp.temperature;
+      humidityValue = humidity.relative_humidity;
+      co2 = 400 + (temperatureC - 20) * 20 + (humidityValue - 50) * 10;
+      if (co2 < 300) co2 = 300;
+
+      Serial.print("T: "); Serial.print(temperatureC);
+      Serial.print("C, H: "); Serial.print(humidityValue);
+      Serial.print("%, CO2: "); Serial.println(co2);
+    }
+  }
+
+  // === Danger detection ===
+  bool danger = (
+    temperatureC >= dangerTemp ||
+    humidityValue >= dangerHumidity ||
+    co2 >= dangerCO2 ||
+    humidityValue >= 100
+  );
+
+  if (danger && !fanTriggered) {
+    digitalWrite(fanPin, HIGH);
+    fanStartTime = currentMillis;
+    fanTriggered = true;
+    Serial.println("FAN ON");
+  }
+
+  if (fanTriggered && currentMillis - fanStartTime >= 5000) {
+    digitalWrite(fanPin, LOW);
+    fanTriggered = false;
+    Serial.println("FAN OFF");
+  }
+
+  // === LED feedback ===
+  if (danger) {
+    digitalWrite(redLed, HIGH);
+    digitalWrite(blueLed, LOW);
+    digitalWrite(greenLed, LOW);
+  } else if (temperatureC >= 50 && temperatureC < dangerTemp) {
+    digitalWrite(blueLed, HIGH);
+    digitalWrite(redLed, LOW);
+    digitalWrite(greenLed, LOW);
+  } else {
+    digitalWrite(greenLed, HIGH);
+    digitalWrite(blueLed, LOW);
+    digitalWrite(redLed, LOW);
+  }
+
+  // === Button Press to Toggle Screens ===
+  bool buttonState = digitalRead(buttonPin);
+
+  if (buttonState == LOW && lastButtonState == HIGH && (currentMillis - lastButtonPressTime) > debounceDelay) {
+    showSensorScreen = !showSensorScreen;
+    lcd.clear();
+    lastButtonPressTime = currentMillis;
+  }
+  lastButtonState = buttonState;
+
+  // === LCD Display ===
+  if (showSensorScreen) {
+    lcd.setCursor(0, 0);
+    lcd.print("T:"); lcd.print(temperatureC, 1);
+    lcd.print("C H:"); lcd.print(humidityValue, 0);
+    lcd.setCursor(0, 1);
+    lcd.print("CO2:"); lcd.print(co2); lcd.print("ppm");
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("T>"); lcd.print(dangerTemp, 0);
+    lcd.print(" H>"); lcd.print(dangerHumidity, 0);
+    lcd.setCursor(0, 1);
+    lcd.print("CO2>"); lcd.print(dangerCO2); lcd.print("ppm");
+  }
+
+  delay(50);
+}
 
