@@ -70,7 +70,7 @@ void loop() {
   int humidPotValue = analogRead(humidPotPin);
   int co2PotValue = analogRead(co2PotPin);
 
-  // ✅ Updated temp range: 10°C to 100°C
+  // data ranges
   float tempMapped = (tempPotValue / 1023.0) * (100 - 10) + 10;
   float humidMapped = (humidPotValue / 1023.0) * (100 - 20) + 20;
   int co2MappedLow = map(co2PotValue, 0, 1023, 250, 600);  // CO2 Low
