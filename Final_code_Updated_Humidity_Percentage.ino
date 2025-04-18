@@ -1,0 +1,192 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_AHTX0.h>
+#include <LiquidCrystal_I2C.h>
+
+// LCD and sensor setup
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+Adafruit_AHTX0 aht;
+
+// Pin definitions
+#define tempPotPin A1
+#define humidPotPin A2
+#define co2PotPin A3
+#define greenLed 2
+#define blueLed 0
+#define redLed 1
+#define fanPin 8
+#define buttonPin 7
+
+// Timing
+unsigned long fanStartTime = 0;
+bool fanTriggered = false;
+unsigned long lastSensorReadTime = 0;
+const unsigned long sensorInterval = 30000;
+
+int screenState = 0; // 0 = set low, 1 = set high, 2 = show data
+bool lastButtonState = HIGH;
+unsigned long lastButtonPressTime = 0;
+const unsigned long debounceDelay = 50;
+
+// Sensor values
+float temperatureC = 0;
+float humidityValue = 0;
+int co2 = 400;
+
+// Thresholds
+float lowTemp = 10, highTemp = 100;
+float lowHumidity = 20, highHumidity = 100;
+int lowCO2 = 250, highCO2 = 700;
+
+void setup() {
+  pinMode(greenLed, OUTPUT);
+  pinMode(blueLed, OUTPUT);
+  pinMode(redLed, OUTPUT);
+  pinMode(fanPin, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+
+  Serial.begin(115200);
+  Wire.begin();
+
+  if (!aht.begin(&Wire, 0x38)) {
+    lcd.setCursor(0, 0);
+    lcd.print("AHT20 not found");
+    while (1);
+  }
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("System Starting...");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // === Read Potentiometers ===
+  int tempPotValue = analogRead(tempPotPin);
+  int humidPotValue = analogRead(humidPotPin);
+  int co2PotValue = analogRead(co2PotPin);
+
+  // data ranges
+  float tempMapped = (tempPotValue / 1023.0) * (100 - 10) + 10;
+  float humidMapped = (humidPotValue / 1023.0) * (100 - 20) + 20;
+  int co2MappedLow = map(co2PotValue, 0, 1023, 250, 600);  // CO2 Low
+  int co2MappedHigh = map(co2PotValue, 0, 1023, 300, 700); // CO2 High
+
+  // === Button Press ===
+  bool buttonState = digitalRead(buttonPin);
+  if (buttonState == LOW && lastButtonState == HIGH && (currentMillis - lastButtonPressTime) > debounceDelay) {
+    screenState = (screenState + 1) % 3;
+    lcd.clear();
+    lastButtonPressTime = currentMillis;
+  }
+  lastButtonState = buttonState;
+
+  // === Save thresholds ===
+  if (screenState == 0) {
+    lowTemp = tempMapped;
+    lowHumidity = humidMapped;
+    lowCO2 = co2MappedLow;
+  } else if (screenState == 1) {
+    highTemp = tempMapped;
+    highHumidity = humidMapped;
+    highCO2 = co2MappedHigh;
+  }
+
+  // === Read sensor every 30s ===
+  if (currentMillis - lastSensorReadTime >= sensorInterval) {
+    lastSensorReadTime = currentMillis;
+
+    sensors_event_t humidity, temp;
+    if (!aht.getEvent(&humidity, &temp)) {
+      Serial.println("Sensor read failed");
+    } else {
+      temperatureC = temp.temperature;
+      humidityValue = humidity.relative_humidity;
+      co2 = 400 + (temperatureC - 20) * 20 + (humidityValue - 50) * 10;
+      if (co2 < 250) co2 = 250;
+      if (co2 > 5000) co2 = 5000;
+
+      Serial.print("T: "); Serial.print(temperatureC);
+      Serial.print("C, H: "); Serial.print(humidityValue);
+      Serial.print("%, CO2: "); Serial.println(co2);
+    }
+  }
+
+  // === Danger Detection ===
+  bool danger = (
+    temperatureC < lowTemp || temperatureC > highTemp ||
+    humidityValue < lowHumidity || humidityValue > highHumidity ||
+    co2 < lowCO2 || co2 > highCO2 ||
+    humidityValue >= 100
+  );
+
+  // === Fan Control ===
+  if (danger && !fanTriggered) {
+    digitalWrite(fanPin, HIGH);
+    fanStartTime = currentMillis;
+    fanTriggered = true;
+    Serial.println("FAN ON");
+  }
+
+  if (fanTriggered && currentMillis - fanStartTime >= 5000) {
+    digitalWrite(fanPin, LOW);
+    fanTriggered = false;
+    Serial.println("FAN OFF");
+  }
+
+  // === LED Feedback ===
+  if (danger) {
+    digitalWrite(redLed, HIGH);
+    digitalWrite(blueLed, LOW);
+    digitalWrite(greenLed, LOW);
+  } else if (temperatureC >= 50 && temperatureC < highTemp) {
+    digitalWrite(blueLed, HIGH);
+    digitalWrite(redLed, LOW);
+    digitalWrite(greenLed, LOW);
+  } else {
+    digitalWrite(greenLed, HIGH);
+    digitalWrite(blueLed, LOW);
+    digitalWrite(redLed, LOW);
+  }
+
+  // === LCD Display ===
+lcd.setCursor(0, 0);
+if (screenState == 0) {
+  lcd.print("LOW T:");
+  lcd.print(lowTemp, 0);
+  lcd.print(" H:");
+  lcd.print(lowHumidity, 0);
+  lcd.print("%");
+  lcd.setCursor(0, 1);
+  lcd.print("CO2:");
+  lcd.print(lowCO2);
+  lcd.print("ppm");
+} else if (screenState == 1) {
+  lcd.print("HIGH T:");
+  lcd.print(highTemp, 0);
+  lcd.print(" H:");
+  lcd.print(highHumidity, 0);
+  lcd.print("%");
+  lcd.setCursor(0, 1);
+  lcd.print("CO2:");
+  lcd.print(highCO2);
+  lcd.print("ppm");
+} else if (screenState == 2) {
+  lcd.print("T:");
+  lcd.print(temperatureC, 1);
+  lcd.print("C ");
+  lcd.print("H:");
+  lcd.print(humidityValue, 0);
+  lcd.print("%");
+  lcd.setCursor(0, 1);
+  lcd.print("CO2:");
+  lcd.print(co2);
+  lcd.print("ppm");
+}
+
+  delay(50);
+}
